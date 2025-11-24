@@ -1,0 +1,34 @@
+{
+  "name": "sample-bridge-checkout-sopify",
+  "version": "1.0.0",
+  "description": "Stripe Checkout integration for Shopify",
+  "private": true,
+  "_comment_support": "🆘 Besoin d'aide ? romain@zedtech.fr | Documentation: /docs/QUICK_START.md",
+  "_comment_warning": "⚠️ Ce code nécessite adaptation à votre contexte (voir README)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "stripe:listen": "stripe listen --forward-to localhost:3000/api/v1/stripe/webhook"
+  },
+  "dependencies": {
+    "next": "^14.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "stripe": "^17.4.0",
+    "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "typescript": "^5.3.3",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

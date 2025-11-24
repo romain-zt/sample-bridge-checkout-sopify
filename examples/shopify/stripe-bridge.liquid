@@ -1,0 +1,1216 @@
+{% comment %}
+╔═══════════════════════════════════════════════════════════════════════════╗
+║  stripe-bridge.liquid - Shopify Bridge Checkout Example                  ║
+║                                                                           ║
+║  Description: JavaScript client pour l'intégration Stripe Checkout       ║
+║                                                                           ║
+║  ⚠️ Ce code nécessite adaptation à votre contexte spécifique             ║
+║     (API_URL, sélecteurs CSS, logique gift cards, messages FR)           ║
+║                                                                           ║
+║  🆘 Support: romain@zedtech.fr                                            ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+═══════════════════════════════════════════════════════════════════════════
+STRIPE BRIDGE - JavaScript Client
+═══════════════════════════════════════════════════════════════════════════
+Ce snippet gère l'interaction entre votre checkout Shopify et l'API Stripe.
+
+⚠️ CONFIGURATION REQUISE:
+- Définissez API_URL avec l'URL de votre API Next.js
+- Adaptez les sélecteurs CSS à votre thème
+- Personnalisez les messages de validation selon votre langue
+
+FONCTIONNALITÉS:
+- Validation des champs client (email, téléphone, nom)
+- Création de session Stripe Checkout
+- Polling après paiement pour récupérer l'order_status_url
+- Gestion des remises et gift cards (optionnel)
+- États de chargement des boutons
+═══════════════════════════════════════════════════════════════════════════
+{% endcomment %}
+
+<style>
+  .finalisation-span {
+    padding: 10px;
+  }
+  .info-input.error {
+    border-color: #dc3545;
+  }
+
+  .validation-message {
+    color: #dc3545;
+    font-size: 0.75rem;
+    margin-top: -1.75rem;
+    margin-bottom: 1.75rem;
+    min-height: 1rem;
+  }
+
+  @media (max-width: 768px) {
+    .validation-message {
+      margin-top: -1rem !important;
+      margin-bottom: 1rem !important;
+    }
+  }
+</style>
+<script>
+  // ═══ CONFIGURATION ═══
+  // ⚠️ TODO: Remplacez par l'URL de votre API Next.js
+  const API_URL = 'https://votre-domaine.com/api';
+
+  // ═══ CLASSE PRINCIPALE ═══
+  class StripeBridge {
+    pollingInterval = null;
+    constructor() {
+      this.setupEventListeners();
+      this.currentRequest = null;
+      this.setupEmailValidation();
+      this.buttonStates = new Map();
+      this.watchOrderResult();
+    }
+
+    // ─── Après paiement: détecte le retour depuis Stripe ───
+    watchOrderResult() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const success = urlParams.get('success') === 'true';
+      const sessionId = urlParams.get('session_id');
+
+      if (success && sessionId) {
+        this.displaySucceedCheckoutContent();
+        this.resetCart();
+        this.startPolling(sessionId);
+      }
+    }
+
+    async resetCart() {
+      await this.fetchWithAbort(`/cart/update.js`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          note: '',
+          attributes: {
+            giftCard: null,
+          },
+        }),
+      });
+      await this.fetchWithAbort(`/discount/clear.js`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      await this.fetchWithAbort(`/cart/clear.js`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+    }
+
+    // ─── Polling: attend la création de la commande Shopify ───
+    startPolling(sessionId) {
+      this.pollingInterval = setInterval(async () => {
+        try {
+          const orderStatusUrl = await this.fetchOrderStatus(sessionId);
+          if (orderStatusUrl) {
+            clearInterval(this.pollingInterval);
+
+            try {
+              await this.resetCart();
+            } catch {
+              console.error('Erreur nettoyage panier');
+            }
+
+            window.location.href = orderStatusUrl;
+          }
+        } catch (error) {
+          console.error('Erreur polling status:', error);
+        }
+      }, 5000); // ⚠️ TODO: Ajustez l'intervalle (5s par défaut)
+    }
+
+    // ─── Récupère l'URL de confirmation Shopify ───
+    async fetchOrderStatus(sessionId) {
+      try {
+        const response = await this.fetchWithAbort(`${API_URL}/v1/session/${sessionId}/order`);
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const data = await response.json();
+        return data.order_status_url;
+      } catch (error) {
+        console.error('Erreur récupération status:', error);
+        return null;
+      }
+    }
+
+    // ─── Configuration de la validation des champs ───
+    // ⚠️ TODO: Adaptez les messages selon votre langue
+    setupEmailValidation() {
+      const fields = {
+        email: {
+          id: 'customerEmail',
+          validator: this.validateEmail,
+          message: 'Veuillez entrer une adresse email valide',
+        },
+        phone: {
+          id: 'customerPhone',
+          validator: this.validatePhone,
+          message: 'Veuillez entrer un numéro de téléphone valide',
+        },
+        firstName: {
+          id: 'customerFirstName',
+          validator: this.validateName,
+          message: 'Le prénom est requis',
+        },
+        lastName: {
+          id: 'customerLastName',
+          validator: this.validateName,
+          message: 'Le nom est requis',
+        },
+      };
+
+      Object.entries(fields).forEach(([fieldName, field]) => {
+        const input = document.getElementById(field.id);
+        if (!input) return;
+
+        input.addEventListener('input', (e) => {
+          this.validateField(e.target, field.validator, field.message);
+        });
+
+        input.addEventListener('blur', (e) => {
+          this.validateField(e.target, field.validator, field.message, true);
+        });
+      });
+    }
+    validateField(input, validator, errorMessage, showMessage = false) {
+      const isValid = validator.call(this, input.value);
+      const messageElement = input.parentElement.querySelector('.validation-message');
+
+      input.classList.toggle('error', !isValid && showMessage);
+
+      if (messageElement) {
+        messageElement.textContent = !isValid && showMessage ? errorMessage : '';
+      }
+
+      return isValid;
+    }
+
+    validateEmail(value) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      return emailRegex.test(value);
+    }
+
+    // ─── Validation téléphone (format international) ───
+    // ⚠️ TODO: Adaptez selon vos besoins (format national, etc.)
+    validatePhone(value) {
+      if (!value || typeof value !== 'string') {
+        return false;
+      }
+
+      const cleaned = value.replace(/[\s.-]/g, '');
+
+      if (!/^(?:\+|00)?[0-9]+$/.test(cleaned)) {
+        return false;
+      }
+
+      const digitsOnly = cleaned.replace(/^(?:\+|00)/, '');
+
+      // ITU-T E.164: 4-15 chiffres
+      if (digitsOnly.length < 4 || digitsOnly.length > 15) {
+        return false;
+      }
+
+      if (cleaned.startsWith('+') || cleaned.startsWith('00')) {
+        return /^[1-9]/.test(digitsOnly);
+      }
+
+      return true;
+    }
+    validateName(value) {
+      return value.trim().length >= 2;
+    }
+
+    validateAllFields() {
+      const fields = [
+        {
+          id: 'customerEmail',
+          validator: this.validateEmail,
+          message: 'Veuillez entrer une adresse email valide',
+        },
+        {
+          id: 'customerPhone',
+          validator: this.validatePhone,
+          message: 'Veuillez entrer un numéro de téléphone valide',
+        },
+        {
+          id: 'customerFirstName',
+          validator: this.validateName,
+          message: 'Le prénom est requis',
+        },
+        {
+          id: 'customerLastName',
+          validator: this.validateName,
+          message: 'Le nom est requis',
+        },
+      ];
+
+      const validations = fields.map((field) => {
+        const input = document.getElementById(field.id);
+        if (!input) return true; // Skip if field doesn't exist
+        return this.validateField(input, field.validator, field.message, true);
+      });
+
+      return validations.every((isValid) => isValid);
+    }
+
+    setButtonLoading(button, isLoading) {
+      if (!button) return;
+
+      const originalText = button.dataset.originalText || button.textContent;
+
+      if (isLoading) {
+        if (!button.dataset.originalText) {
+          button.dataset.originalText = originalText;
+        }
+
+        button.disabled = true;
+        button.classList.add('loading');
+        button.innerHTML = `<span class="loading-spinner"></span>`;
+      } else {
+        button.disabled = false;
+        button.classList.remove('loading');
+        button.textContent = originalText;
+      }
+    }
+
+    setupEventListeners() {
+      const discountForm = document.querySelector('.discount-form');
+      if (discountForm) {
+        discountForm.addEventListener('submit', async (e) => {
+          e.preventDefault(); // Prevent form from submitting normally
+          const submitButton = discountForm.querySelector('button[type="submit"]');
+          const discountInput = discountForm.querySelector('.discount-input');
+
+          if (!discountInput.value) return;
+
+          this.setButtonLoading(submitButton, true);
+          await this.applyDiscount(discountInput.value);
+          this.setButtonLoading(submitButton, false);
+        });
+      }
+
+      document.querySelectorAll('.quantity-controls').forEach((control) => {
+        const decreaseBtn = control.querySelector('.quantity-btn:first-child');
+        const increaseBtn = control.querySelector('.quantity-btn:last-child');
+        const productItem = control.closest('.product-item');
+        const lineItemKey = productItem.dataset.key;
+
+        const handleQuantityUpdate = async (action, button) => {
+          this.setButtonLoading(button, true);
+          await this.updateQuantity(lineItemKey, action);
+          this.setButtonLoading(button, false);
+        };
+
+        decreaseBtn.addEventListener('click', () => handleQuantityUpdate('decrease', decreaseBtn));
+        increaseBtn.addEventListener('click', () => handleQuantityUpdate('increase', increaseBtn));
+      });
+
+      document.querySelectorAll('.remove-btn-desktop, .remove-btn-mobile').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const productItem = btn.closest('.product-item');
+          this.setButtonLoading(btn, true);
+          await this.removeProduct(productItem.dataset.key);
+          this.setButtonLoading(btn, false);
+        });
+      });
+
+      document.querySelectorAll('.remove-discount-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          console.log('Remove button clicked'); // Debugging output
+          const discountItem = btn.closest('.applied-discount');
+          if (!discountItem) {
+            console.error('Product item not found');
+            return;
+          }
+          this.setButtonLoading(btn, true);
+          await this.removeDiscount(btn.dataset.code, btn.dataset.type);
+          this.setButtonLoading(btn, false);
+        });
+      });
+
+      const checkoutBtn = document.querySelector('.checkout-cta');
+      if (checkoutBtn) {
+        checkoutBtn.addEventListener('click', async () => {
+          this.validateAllFields();
+          this.setButtonLoading(checkoutBtn, true);
+          await this.createCheckoutSession();
+          this.setButtonLoading(checkoutBtn, false);
+        });
+      }
+    }
+
+    // ═══ CRÉATION SESSION STRIPE ═══
+    // 🆘 Problème lors de la création de session ? Vérifiez API_URL et payload | romain@zedtech.fr
+    async createCheckoutSession() {
+      const checkoutBtn = document.querySelector('.checkout-cta');
+
+      try {
+        if (!this.validateAllFields()) return;
+
+        const cart = await fetch('/cart.js').then((r) => r.json());
+        const customer = {
+          email: document.getElementById('customerEmail').value,
+          phone: document.getElementById('customerPhone').value,
+          first_name: document.getElementById('customerFirstName').value,
+          last_name: document.getElementById('customerLastName').value,
+        };
+
+        const cartData = await this.prepareCartData(cart, customer);
+
+        const response = await fetch(`${API_URL}/v1/stripe/checkout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(cartData),
+        });
+
+        const data = await response.json();
+
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error('Pas d\'URL de paiement reçue');
+        }
+      } catch (error) {
+        console.error('Erreur création session:', error);
+        this.setButtonLoading(checkoutBtn, false);
+      }
+    }
+
+    {% comment %} async applyDiscount(code) {
+      if (!code) return;
+      const giftCardRegex = /^\s*[A-Za-z0-9]{4}(?:\s*[A-Za-z0-9]{4}){3}\s*$/;
+      const isGiftCard = giftCardRegex.test(code) || code.length === 16;
+
+      const errorMessageElement = document.querySelector('.discount-error-message');
+
+      //  7AAB 6C43 935B E7HC
+
+      try {
+        let giftCard = null;
+        if (isGiftCard) {
+          const cart = await fetch('/cart.js').then((r) => r.json());
+
+          giftCard = await this.fetchWithAbort(`${API_URL}/v1/giftcard/check`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              giftCardCode: code,
+              cartTotal: cart.original_total_price,
+            }),
+          }).then((r) => r.json());
+
+          if (giftCard.success && giftCard.balance) {
+            if (giftCard.packCode) {
+              const response = await this.fetchWithAbort(`/discount/${giftCard.packCode}`, {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              });
+            }
+
+            // Trigger a custom event that the framework--cart might be listening to
+
+            try {
+              const newCart = await fetch('/cart.js').then((r) => r.json());
+              await fetch(`/cart/update.js`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  note: code,
+                  attributes: {
+                    gift_card: code,
+                    giftCard: {
+                      packCode: giftCard.packCode,
+                      balance: giftCard.balance,
+                      amount:
+                        +giftCard.balance >= +newCart.total_price
+                          ? +newCart.total_price
+                          : +giftCard.balance,
+                    },
+                  },
+                }),
+              });
+              const cartUpdateEvent = new CustomEvent('cart:updated', {
+                detail: {
+                  cartContent: doc.querySelector('.cart--drawer-content')?.innerHTML,
+                },
+              });
+              document.dispatchEvent(cartUpdateEvent);
+              setTimeout(() => this.updatePageContent(), 500);
+            } catch {}
+
+            window.location.reload();
+          }
+
+          if (!giftCard.success) {
+            // Display error message
+            document.querySelector('.discount-error-message').textContent =
+              giftCard.reason || 'Code invalide';
+          } else {
+            // Clear error message
+            document.querySelector('.discount-error-message').textContent = '';
+          }
+
+          return await this.updatePageContent();
+        }
+
+        const response = await this.fetchWithAbort(`/discount/${code}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        this.updatePageContent();
+      } catch (error) {
+        console.error('Error applying discount:', error);
+      }
+    } {% endcomment %}
+
+    {% comment %} async applyDiscount(code) {
+      if (!code) return;
+      const giftCardRegex = /^\s*[A-Za-z0-9]{4}(?:\s*[A-Za-z0-9]{4}){3}\s*$/;
+      const isGiftCard = giftCardRegex.test(code) || code.length === 16;
+
+      const errorMessageElement = document.querySelector('.discount-error-message');
+
+      try {
+        let giftCard = null;
+        if (isGiftCard) {
+          const cart = await fetch('/cart.js').then((r) => r.json());
+
+          giftCard = await this.fetchWithAbort(`${API_URL}/v1/giftcard/check`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              giftCardCode: code,
+              cartTotal: cart.original_total_price,
+            }),
+          }).then((r) => r.json());
+
+          if (giftCard.success && giftCard.balance) {
+            if (giftCard.packCode) {
+              await this.fetchWithAbort(`/discount/${giftCard.packCode}`, {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              });
+            }
+
+            try {
+              const newCart = await fetch('/cart.js').then((r) => r.json());
+              await fetch('/cart/update.js', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  note: code,
+                  attributes: {
+                    gift_card: code,
+                    giftCard: {
+                      packCode: giftCard.packCode,
+                      balance: giftCard.balance,
+                      amount:
+                        +giftCard.balance >= +newCart.total_price
+                          ? +newCart.total_price
+                          : +giftCard.balance,
+                    },
+                  },
+                }),
+              });
+
+              const cartUpdateEvent = new CustomEvent('cart:updated', {
+                detail: {
+                  cartContent: document.querySelector('.cart--drawer-content')?.innerHTML,
+                },
+              });
+              document.dispatchEvent(cartUpdateEvent);
+              setTimeout(() => this.updatePageContent(), 500);
+            } catch (err) {
+              console.error('Cleaning cart has failed', err);
+            }
+
+            window.location.reload();
+            return;
+          }
+
+          if (!giftCard.success) {
+            if (errorMessageElement) {
+              errorMessageElement.textContent = giftCard.reason || 'Code invalide';
+            }
+            return;
+          }
+        }
+
+        // CORRECTION : Gestion des codes de réduction/fidélité avec vérification d'applicabilité
+        const response = await this.fetchWithAbort(`/discount/${code}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        // Vérifier si la requête a réussi
+        if (response.ok) {
+          // Récupérer le panier mis à jour pour vérifier l'applicabilité
+          const updatedCart = await fetch('/cart.js').then((r) => r.json());
+
+          // Vérifier si le code est dans la liste des discount_codes et s'il est applicable
+          const discountStatus = updatedCart.discount_codes?.find(
+            (dc) => dc.code.toUpperCase() === code.toUpperCase(),
+          );
+
+          if (discountStatus) {
+            if (discountStatus.applicable) {
+              // Le code est valide et applicable
+              if (errorMessageElement) {
+                errorMessageElement.textContent = '';
+              }
+              await this.updatePageContent();
+            } else {
+              // Le code existe mais n'est pas applicable au panier actuel
+              if (errorMessageElement) {
+                errorMessageElement.textContent =
+                  "Ce code de réduction n'est pas applicable à votre panier";
+              }
+              // Supprimer le code non applicable
+              await this.fetchWithAbort('/cart/update.js', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  discount: '',
+                }),
+              });
+            }
+          } else {
+            // Le code n'a pas été appliqué (invalide)
+            if (errorMessageElement) {
+              errorMessageElement.textContent = 'Code de réduction invalide';
+            }
+          }
+        } else {
+          // La requête a échoué
+          if (errorMessageElement) {
+            errorMessageElement.textContent = 'Code de réduction invalide';
+          }
+        }
+      } catch (error) {
+        console.error('Error applying discount:', error);
+        if (errorMessageElement) {
+          errorMessageElement.textContent = 'Une erreur est survenue. Veuillez réessayer.';
+        }
+      }
+    }
+
+    async removeDiscount(code = '', type = '') {
+      try {
+        const cart = await fetch('/cart.js').then((r) => r.json());
+        if (type === 'giftcard') {
+          try {
+            console.log('Removing gift card : ', type, code);
+            const giftCard = await this.fetchWithAbort(`${API_URL}/v1/giftcard/check`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                giftCardCode: code,
+                cartTotal: cart.original_total_price,
+              }),
+            }).then((r) => r.json());
+
+            await fetch(`/cart/update.js`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                note: '',
+                attributes: {
+                  gift_card: null,
+                  giftCard: null,
+                },
+              }),
+            });
+
+            if (giftCard.packCode) {
+              const response = await this.fetchWithAbort(`/discount/${giftCard.packCode}/clear`, {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              });
+
+              await fetch(`/cart/update.js`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  note: '',
+                  attributes: {
+                    gift_card: null,
+                    giftCard: null,
+                  },
+                }),
+              });
+            }
+          } catch {
+            console.log('Failed to get card, cleaning cart discounrt');
+          }
+
+          return this.updatePageContent();
+        }
+
+        console.log('Removing code : ', type, code);
+
+        const response = await this.fetchWithAbort('/cart/update.js', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            discount: '',
+          }),
+        });
+
+        if (response.ok) {
+          this.updatePageContent();
+        }
+      } catch (error) {
+        console.error('Error removing discount:', error);
+      }
+    } {% endcomment %}
+
+
+    // ─── Applique un code promo ou gift card ───
+    async applyDiscount(code) {
+      if (!code) return;
+      
+      // Détection gift card (format: 4 groupes de 4 caractères)
+      const giftCardRegex = /^\s*[A-Za-z0-9]{4}(?:\s*[A-Za-z0-9]{4}){3}\s*$/;
+      const isGiftCard = giftCardRegex.test(code) || code.length === 16;
+
+      const errorMessageElement = document.querySelector('.discount-error-message');
+
+      try {
+        let giftCard = null;
+        
+        // ─── Traitement GIFT CARD ───
+        if (isGiftCard) {
+          const cart = await fetch('/cart.js').then((r) => r.json());
+
+          // ⚠️ NOTE: Nécessite l'endpoint /v1/giftcard/check dans votre API
+          giftCard = await this.fetchWithAbort(`${API_URL}/v1/giftcard/check`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              giftCardCode: code,
+              cartTotal: cart.original_total_price,
+            }),
+          }).then((r) => r.json());
+
+          if (giftCard.success && giftCard.balance) {
+            // Si la gift card inclut un code promo associé
+            if (giftCard.packCode) {
+              await this.fetchWithAbort(`/discount/${giftCard.packCode}`, {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              });
+            }
+
+            try {
+              const newCart = await fetch('/cart.js').then((r) => r.json());
+
+              // Calcul du montant applicable (ne peut pas dépasser le total)
+              const remainingPrice = newCart.total_price;
+              const giftCardBalance = +giftCard.balance;
+              const applicableAmount = Math.min(giftCardBalance, remainingPrice);
+
+              await fetch('/cart/update.js', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  note: code,
+                  attributes: {
+                    gift_card: code,
+                    giftCard: {
+                      packCode: giftCard.packCode,
+                      balance: giftCard.balance,
+                      amount: applicableAmount,
+                    },
+                  },
+                }),
+              });
+
+              const cartUpdateEvent = new CustomEvent('cart:updated', {
+                detail: {
+                  cartContent: document.querySelector('.cart--drawer-content')?.innerHTML,
+                },
+              });
+              document.dispatchEvent(cartUpdateEvent);
+              setTimeout(() => this.updatePageContent(), 500);
+            } catch (err) {
+              console.error('Cleaning cart has failed', err);
+            }
+
+            window.location.reload();
+            return;
+          }
+
+          if (!giftCard.success) {
+            if (errorMessageElement) {
+              errorMessageElement.textContent = giftCard.reason || 'Code invalide';
+            }
+            return;
+          }
+        }
+
+        // ─── Traitement CODE PROMO standard ───
+        const response = await this.fetchWithAbort(`/discount/${code}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const updatedCart = await fetch('/cart.js').then((r) => r.json());
+
+          const discountStatus = updatedCart.discount_codes?.find(
+            (dc) => dc.code.toUpperCase() === code.toUpperCase(),
+          );
+
+          if (discountStatus) {
+            if (discountStatus.applicable) {
+              if (errorMessageElement) {
+                errorMessageElement.textContent = '';
+              }
+
+              // Si gift card appliquée, recalculer son montant avec la nouvelle réduction
+              if (updatedCart.attributes?.giftCard) {
+                const remainingPrice = updatedCart.total_price;
+                const giftCardBalance = +updatedCart.attributes.giftCard.balance;
+                const newApplicableAmount = Math.min(giftCardBalance, remainingPrice);
+
+                if (newApplicableAmount !== updatedCart.attributes.giftCard.amount) {
+                  await fetch('/cart/update.js', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      attributes: {
+                        gift_card: updatedCart.attributes.gift_card,
+                        giftCard: {
+                          ...updatedCart.attributes.giftCard,
+                          amount: newApplicableAmount,
+                        },
+                      },
+                    }),
+                  });
+                }
+              }
+
+              await this.updatePageContent();
+            } else {
+              if (errorMessageElement) {
+                errorMessageElement.textContent =
+                  "Ce code de réduction n'est pas applicable à votre panier";
+              }
+              await this.fetchWithAbort('/cart/update.js', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  discount: '',
+                }),
+              });
+            }
+          } else {
+            if (errorMessageElement) {
+              errorMessageElement.textContent = 'Code de réduction invalide';
+            }
+          }
+        } else {
+          if (errorMessageElement) {
+            errorMessageElement.textContent = 'Code de réduction invalide';
+          }
+        }
+      } catch (error) {
+        console.error('Error applying discount:', error);
+        if (errorMessageElement) {
+          errorMessageElement.textContent = 'Une erreur est survenue. Veuillez réessayer.';
+        }
+      }
+    }
+
+    async removeDiscount(code = '', type = '') {
+      try {
+        const cart = await fetch('/cart.js').then((r) => r.json());
+
+        if (type === 'giftcard') {
+          try {
+            console.log('Removing gift card : ', type, code);
+            const giftCard = await this.fetchWithAbort(`${API_URL}/v1/giftcard/check`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                giftCardCode: code,
+                cartTotal: cart.original_total_price,
+              }),
+            }).then((r) => r.json());
+
+            await fetch(`/cart/update.js`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                note: '',
+                attributes: {
+                  gift_card: null,
+                  giftCard: null,
+                },
+              }),
+            });
+
+            if (giftCard.packCode) {
+              await this.fetchWithAbort(`/discount/${giftCard.packCode}/clear`, {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              });
+
+              await fetch(`/cart/update.js`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  note: '',
+                  attributes: {
+                    gift_card: null,
+                    giftCard: null,
+                  },
+                }),
+              });
+            }
+          } catch (err) {
+            console.log('Failed to get card, cleaning cart discount', err);
+          }
+
+          await this.updatePageContent();
+          return;
+        }
+
+        console.log('Removing discount code : ', type, code);
+
+        const response = await this.fetchWithAbort('/cart/update.js', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            discount: '',
+          }),
+        });
+
+        if (response.ok) {
+          // Recalcul gift card après suppression de la réduction
+          const updatedCart = await fetch('/cart.js').then((r) => r.json());
+
+          if (updatedCart.attributes?.giftCard) {
+            const remainingPrice = updatedCart.total_price;
+            const giftCardBalance = +updatedCart.attributes.giftCard.balance;
+            const newApplicableAmount = Math.min(giftCardBalance, remainingPrice);
+
+            await fetch('/cart/update.js', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                attributes: {
+                  gift_card: updatedCart.attributes.gift_card,
+                  giftCard: {
+                    ...updatedCart.attributes.giftCard,
+                    amount: newApplicableAmount,
+                  },
+                },
+              }),
+            });
+          }
+
+          await this.updatePageContent();
+        }
+      } catch (error) {
+        console.error('Error removing discount:', error);
+      }
+    }
+
+
+
+
+    async updateQuantity(lineItemKey, action) {
+      const currentQuantity = parseInt(
+        document.querySelector(`[data-key="${lineItemKey}"] .quantity-input`).value,
+      );
+      const newQuantity = action === 'increase' ? currentQuantity + 1 : currentQuantity - 1;
+
+      if (newQuantity < 0) return;
+
+      try {
+        const response = await this.fetchWithAbort('/cart/change.js', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: lineItemKey,
+            quantity: newQuantity,
+          }),
+        });
+
+        if (response.ok) {
+          this.updatePageContent();
+        }
+      } catch (error) {
+        console.error('Error updating quantity:', error);
+      }
+    }
+
+    async removeProduct(lineItemKey) {
+      try {
+        const response = await this.fetchWithAbort('/cart/change.js', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: lineItemKey,
+            quantity: 0,
+          }),
+        });
+
+        if (response.ok) {
+          this.updatePageContent();
+        }
+      } catch (error) {
+        console.error('Error removing product:', error);
+      }
+    }
+
+
+    // ═══ PRÉPARATION DES DONNÉES ═══
+    async prepareCartData(cart, customer) {
+      const formattedItems = cart.items.map((item) => ({
+        title: item.product_title,
+        price: item.price,
+        original_price: item.original_price,
+        final_price: item.discounted_price,
+        quantity: item.quantity,
+        description: item.product_description
+          ? item.product_description.split('\n')[0]
+          : item.title,
+        image: item.image,
+        discounts: item.discounts,
+      }));
+      
+      return {
+        cart,
+        customer,
+        discounts: cart.items.reduce((acc, cur) => [...acc, ...cur.discounts], []),
+        payload: {
+          customer,
+          customer_email: customer.email,
+          items: formattedItems,
+          subtotal: cart.original_total_price,
+          discounts:
+            cart.cart_level_discount_applications?.map((discount) => ({
+              title: discount.title,
+              type: discount.type,
+              value: discount.value,
+              value_type: discount.value_type,
+              amount: discount.total_allocated_amount,
+            })) || [],
+          total_discounts: cart.total_discount + (cart.attributes?.giftCard?.amount || 0),
+          tax: cart.total_tax ?? 0,
+          final_price: cart.total_price + (cart.total_tax ?? 0),
+        },
+      };
+    }
+
+    // ═══ AFFICHAGE POST-PAIEMENT ═══
+    // ⚠️ TODO: Adapter les sélecteurs CSS à votre thème
+    async displaySucceedCheckoutContent() {
+      try {
+        const response = await fetch(window.location.href);
+        const html = await response.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        const sections = [
+          '.product-list',
+          '.discount-container',
+          '.totals-section',
+          '.hero-section',
+          '.subtotal',
+          '.discount-amount',
+          '.cart--external--total-items',
+          '.checkout-cta',
+        ];
+
+        sections.forEach((selector) => {
+          const newContent = doc.querySelector(selector);
+          const currentContent = document.querySelector(selector);
+          if (newContent && currentContent) {
+            currentContent.innerHTML = newContent.innerHTML;
+          }
+        });
+
+        document.querySelectorAll('input, button').forEach((element) => {
+          element.disabled = true;
+        });
+
+        const h1Span = document.querySelector('.page-title-common');
+        if (h1Span) {
+          h1Span.textContent = 'Merci pour votre commande'; // ⚠️ TODO: Traduire
+        }
+
+        const checkoutBtn = document.querySelector('.checkout-cta');
+        if (checkoutBtn) {
+          this.setButtonLoading(checkoutBtn, true);
+          checkoutBtn.innerHTML =
+            checkoutBtn.innerHTML + '<span class="finalisation-span">Finalisation...</span>';
+        }
+
+        this.setupEventListeners();
+      } catch (error) {
+        console.error('Erreur mise à jour contenu:', error);
+      }
+    }
+
+    // ─── Mise à jour dynamique du contenu (après actions panier) ───
+    async updatePageContent() {
+      try {
+        const response = await fetch(window.location.href);
+        const html = await response.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        const sections = [
+          '.product-list',
+          '.discount-container',
+          '.totals-section',
+          '.hero-section',
+          '.subtotal',
+          '.discount-amount',
+          '.giftcard-amount',
+          '.cart--external--total-items',
+        ];
+
+        sections.forEach((selector) => {
+          const newContent = doc.querySelector(selector);
+          const currentContent = document.querySelector(selector);
+          if (newContent && currentContent) {
+            currentContent.innerHTML = newContent.innerHTML;
+          }
+        });
+
+        // Gestion dynamique des lignes de réduction/gift card
+        const currentDiscountLine = document.querySelector('.discount-amount');
+        const newDiscountLine = doc.querySelector('.discount-amount');
+        const currentGiftLine = document.querySelector('.giftcard-amount');
+        const newGiftLine = doc.querySelector('.giftcard-amount');
+
+        if (newDiscountLine && !currentDiscountLine) {
+          const subtotalElement = document.querySelector('.subtotal');
+          subtotalElement.insertAdjacentHTML('afterend', newDiscountLine.outerHTML);
+        } else if (!newDiscountLine && currentDiscountLine) {
+          currentDiscountLine.remove();
+        } else if (newDiscountLine && currentDiscountLine) {
+          currentDiscountLine.innerHTML = newDiscountLine.innerHTML;
+        }
+
+        if (newGiftLine && !currentGiftLine) {
+          const allSubtotalElems = document.querySelectorAll('.subtotal');
+          const subtotalElement = allSubtotalElems[allSubtotalElems.length - 1];
+          subtotalElement.insertAdjacentHTML('afterend', newGiftLine.outerHTML);
+        } else if (!newGiftLine && currentGiftLine) {
+          currentGiftLine.remove();
+        } else if (newGiftLine && currentGiftLine) {
+          currentGiftLine.innerHTML = newGiftLine.innerHTML;
+        }
+
+        this.setupEventListeners();
+      } catch (error) {
+        console.error('Erreur mise à jour page:', error);
+      }
+    }
+
+    // ─── Fetch avec annulation des requêtes en cours ───
+    fetchWithAbort(url, options = {}) {
+      if (this.currentRequest) {
+        this.currentRequest.abort();
+      }
+
+      const controller = new AbortController();
+      this.currentRequest = controller;
+      options.signal = controller.signal;
+
+      return fetch(url, options).finally(() => {
+        if (this.currentRequest === controller) {
+          this.currentRequest = null;
+        }
+      });
+    }
+  }
+
+  // ═══ INITIALISATION ═══
+  document.addEventListener('DOMContentLoaded', () => {
+    window.stripeBridge = new StripeBridge();
+  });
+</script>
+
+{% comment %}
+📚 DOCUMENTATION COMPLÈTE: /docs/QUICK_START.md
+🆘 SUPPORT: romain@zedtech.fr ou GitHub Issues
+{% endcomment %}

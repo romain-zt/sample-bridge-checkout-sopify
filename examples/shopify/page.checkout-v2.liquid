@@ -1,0 +1,286 @@
+{% comment %}
+═══════════════════════════════════════════════════════════════════════════
+TEMPLATE: Page Checkout Custom (Shopify)
+═══════════════════════════════════════════════════════════════════════════
+Template de page checkout personnalisé avec intégration Stripe Bridge.
+
+STRUCTURE:
+- Formulaire client (email, téléphone, nom)
+- Liste des produits du panier
+- Section remises/gift cards
+- Récapitulatif et bouton de paiement
+
+⚠️ PERSONNALISATION REQUISE:
+- Adaptez les CSS à votre thème
+- Remplacez les textes/placeholders
+- Modifiez les liens de navigation
+- Ajustez les snippets renders (checkout-product-list-v2, etc.)
+═══════════════════════════════════════════════════════════════════════════
+{% endcomment %}
+
+{% comment %} ⚠️ TODO: Créez le fichier CSS correspondant {% endcomment %}
+{% comment %}
+╔═══════════════════════════════════════════════════════════════════════════╗
+║  page.checkout-v2.liquid - Shopify Bridge Checkout Example               ║
+║                                                                           ║
+║  Description: Template Shopify personnalisé pour checkout avec Stripe    ║
+║                                                                           ║
+║  ⚠️ Ce code nécessite adaptation à votre contexte spécifique             ║
+║     (logique fidélité, gift cards, styles CSS, messages FR)              ║
+║                                                                           ║
+║  🆘 Support: romain@zedtech.fr                                            ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+{% endcomment %}
+
+{{ 'checkout-v2.css' | asset_url | stylesheet_tag }}  
+
+<div class="checkout-container">
+  {% if cart.item_count != 0 %}
+
+    <style>
+      /* ⚠️ TODO: Adapter à votre thème */
+      #shopify-section-announcement {  
+        display: none;  
+      }  
+      
+      #shopify-section-header {  
+        position: fixed;  
+        z-index: 10000;  
+        top: 0;  
+        left: 0;  
+        width: 100%;  
+      }
+        
+      @media (max-width: 768px) {  
+        #shopify-section-framework--footer,  
+        #shopify-chat {  
+          display: none;  
+        }
+      }
+    </style>
+    
+    {% comment %} ─── Titre de page ─── {% endcomment %}
+    <h1 class="page-title">
+      {% if customer %}
+      {{ customer.first_name | camelcase }},<br>
+      {% endif %}
+      <span class="page-title-common">
+      {{ page.title }}
+      </span>
+    </h1>
+    
+    {% comment %} Champs cachés pour pré-remplir si client connecté {% endcomment %}
+    <input type="hidden" id="customer_first_name" value="{{ customer.first_name }}">
+    <input type="hidden" id="customer_last_name" value="{{ customer.last_name }}">
+    <input type="hidden" id="customer_phone" value="{{ customer.phone }}">
+
+    {% endif %}
+
+    {% comment %} 
+    ─── Section Hero (optionnelle) ───
+    ⚠️ TODO: Personnalisez ou supprimez cette section
+    Exemple: message de bienvenue, avantages, etc.
+    {% endcomment %}
+    {% if cart.total_price > 0 %}
+  <div class="hero-section">
+    <div class="hero-text">
+        <strong style="text-align: center; margin: auto; width: 100%; display:block; margin-top: 5px;">
+          {% if customer.email %}
+            {% comment %} ⚠️ TODO: Message personnalisé client connecté {% endcomment %}
+            Merci pour votre fidélité !
+          {% else %}
+            {% comment %} ⚠️ TODO: Incitation à la connexion {% endcomment %}
+            <a style="text-decoration: underline;" href="/account/login?checkout_url=/pages/checkout">Connectez-vous</a>
+            pour bénéficier de vos avantages
+          {% endif %}
+        </strong>
+    </div>
+  </div>
+      {% endif %}
+  {% if cart.item_count != 0 %}
+
+    {% comment %} ═══ FORMULAIRE CLIENT ═══ {% endcomment %}
+    {% comment %} ⚠️ TODO: Adaptez les labels/placeholders à votre langue {% endcomment %}
+    <div class="customer-infos-section">
+  <div class="customer-info-grid">
+    
+    <div class="info-field">
+      <label for="customerEmail" class="info-label">Email</label>
+      {% if customer.email %}
+        <input
+          type="email"
+          id="customerEmail"
+          name="email"
+          autocomplete="email"
+          value="{{ customer.email }}"
+          placeholder="votre@email.com"
+          required
+          readonly="true"
+          class="info-input"
+        >
+      {% else %}
+        <input
+          type="email"
+          id="customerEmail"
+          name="email"
+          autocomplete="email"
+          placeholder="votre@email.com"
+          required
+          class="info-input"
+        />
+      {% endif %}
+      <span class="validation-message"></span>
+    </div>
+
+    <div class="info-field">
+      <label for="customerPhone" class="info-label">Téléphone</label>
+      <input
+        type="tel"
+        name="phone"
+        id="customerPhone"
+        autocomplete="tel"
+        value="{{ customer.phone }}"
+        placeholder="+33 6 01 02 03 04"
+        required
+        class="info-input"
+      >
+      <span class="validation-message"></span>
+    </div>
+    
+    <div class="info-field">
+      <label for="customerFirstName" class="info-label">Prénom</label>
+      <input
+        type="text"
+        id="customerFirstName"
+        name="firstname"
+        autocomplete="given-name"
+        value="{{ customer.first_name }}"
+        placeholder="Jean"
+        required
+        class="info-input"
+      >
+      <span class="validation-message"></span>
+    </div>
+
+    <div class="info-field">
+      <label for="customerLastName" class="info-label">Nom</label>
+      <input
+        type="text"
+        name="lastname"
+        id="customerLastName"
+        autocomplete="family-name"
+        value="{{ customer.last_name }}"
+        placeholder="DUPONT"
+        required
+        class="info-input"
+      >
+      <span class="validation-message"></span>
+    </div>
+  </div>
+</div>
+    
+    {% endif %}
+
+  {% comment %} 
+  ═══ LISTE DES PRODUITS ═══
+  ⚠️ TODO: Créez le snippet 'checkout-product-list-v2' ou adaptez à votre existant
+  {% endcomment %}
+  {% render 'checkout-product-list-v2' %}
+
+  {% if cart.item_count == 0 %}
+    {% comment %} ⚠️ TODO: Personnalisez le message panier vide {% endcomment %}
+    <div class="empty-cart">
+      <h1 class=".h3">Votre panier est vide</h1>
+      <p>
+        <a href="/collections/all">Continuer vos achats</a>
+      </p>
+    </div>
+  {% endif %}
+
+
+  {% if cart.item_count != 0 %}
+
+  {% comment %} 
+  ═══ SECTION REMISES/GIFT CARDS ═══
+  ⚠️ TODO: Créez le snippet 'checkout-discount-v2' pour le formulaire de code promo
+  {% endcomment %}
+  {% render 'checkout-discount-v2' %}
+
+    {% comment %} ═══ RÉCAPITULATIF PRIX ═══ {% endcomment %}
+    <div class="subtotal-container">
+      <div class="subtotal amount">
+        <span>Sous-total</span>
+        <span>{{ cart.items_subtotal_price | money }}</span>
+      </div>
+      
+      {% if cart.total_discounts > 0 %}
+        <div class="subtotal discount-amount">
+          <span>Réduction</span>
+          <span>-{{ cart.total_discounts | money }}</span>
+        </div>
+      {% endif %}
+    
+      {% comment %} 
+      ─── Affichage gift card (optionnel) ───
+      Calcule le montant applicable (max = total restant)
+      {% endcomment %}
+      {% if cart.note.size > 0 and cart.attributes.giftCard.amount > 0 %}
+        {% assign remaining_price = cart.total_price %}
+        {% assign gift_card_amount = cart.attributes.giftCard.amount %}
+        
+        {% if gift_card_amount > remaining_price %}
+          {% assign applicable_gift_card = remaining_price %}
+        {% else %}
+          {% assign applicable_gift_card = gift_card_amount %}
+        {% endif %}
+        
+        {% if applicable_gift_card > 0 %}
+          <div class="subtotal giftcard-amount">
+            <span>Carte cadeau</span>
+            <span>-{{ applicable_gift_card | money }}</span>
+          </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  
+  {% comment %} ═══ SECTION TOTAL & CTA ═══ {% endcomment %}
+  <div class="checkout-cta-wrapper">
+    <div class="totals-section">
+      <div class="total">
+        <span>Total</span>
+        {% if cart.note.size && cart.attributes.giftCard.amount > 0 %}
+        <span>{{ cart.total_price | minus: cart.attributes.giftCard.amount | money }}</span>
+        {% else %}
+        <span>{{ cart.total_price | money }}</span>
+        {% endif %}
+      </div>
+
+      {% comment %} 
+      ⚠️ TODO (optionnel): Affichage paiement en 3x
+      Adaptez les montants min/max selon vos besoins
+      Exemple: Klarna, Alma, etc.
+      {% endcomment %}
+      {% if cart.attributes.giftCard.amount > 0 && cart.total_price - cart.attributes.giftCard.amount > 4500 && cart.total_price - cart.attributes.giftCard.amount < 450000 %}  
+        <small style="text-align: right; font-weight: 500; margin-top: -18px;">  
+          ou 3 x {{ cart.total_price | minus: cart.attributes.giftCard.amount | times: 1.0 | divided_by: 3.0 | ceil | money }}  
+        </small>  
+      {% elsif cart.attributes.giftCard.amount <= 0 && cart.total_price > 4500 && cart.total_price < 450000 %}  
+        <small style="text-align: right; font-weight: 500; margin-top: -18px;">  
+          ou 3 x {{ cart.total_price | times: 1.0 | divided_by: 3.0 | ceil | money }}  
+        </small>  
+      {% endif %}  
+    </div>
+
+    {% comment %} ⚠️ TODO: Personnalisez le texte du bouton {% endcomment %}
+    <button class="checkout-cta">Payer</button>
+  </div>
+        {% endif %}
+</div>
+
+{% comment %} ═══ INTEGRATION STRIPE BRIDGE ═══ {% endcomment %}
+{% render 'stripe-bridge' %}
+
+{% comment %}
+📚 DOCUMENTATION COMPLÈTE: /docs/QUICK_START.md
+🆘 SUPPORT: romain@zedtech.fr ou GitHub Issues
+{% endcomment %}
