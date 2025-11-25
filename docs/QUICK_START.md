@@ -2,6 +2,8 @@
 
 Guide d'installation pas à pas pour intégrer Stripe dans votre boutique Shopify.
 
+📖 **[Lire le retour d'expérience complet sur LinkedIn →](https://www.linkedin.com/posts/romain-piveteau_23-de-conversion-gr%C3%A2ce-au-checkout-activity-7398986372008701953-fS-O)** (+23% de conversion)
+
 ---
 
 ## Étape 1️⃣ : Installer les dépendances (2 min)

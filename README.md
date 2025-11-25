@@ -4,6 +4,8 @@
 
 **Résultat prouvé:** Conversion 6.49% → 8.01% (+23%) = +€32,534 en 10 mois sur LittleBiceps
 
+📖 **[Lire le retour d'expérience complet sur LinkedIn →](https://www.linkedin.com/posts/romain-piveteau_23-de-conversion-gr%C3%A2ce-au-checkout-activity-7398986372008701953-fS-O)**
+
 [![GitHub stars](https://img.shields.io/github/stars/romain-zt/sample-bridge-checkout-sopify)](https://github.com/romain-zt/sample-bridge-checkout-sopify/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/romain-zt/sample-bridge-checkout-sopify)](https://github.com/romain-zt/sample-bridge-checkout-sopify/network)
 
@@ -115,6 +117,7 @@ sample-bridge-checkout-shopify/
 **Questions ou problèmes ?**
 - 🐛 Ouvrez une [issue GitHub](https://github.com/romain-zt/sample-bridge-checkout-sopify/issues)
 - 📧 Email : **[romain@zedtech.fr](mailto:romain@zedtech.fr)**
+- 📖 Retrouvez le post LinkedIn original : **[Retour d'expérience +23% de conversion](https://www.linkedin.com/posts/romain-piveteau_23-de-conversion-gr%C3%A2ce-au-checkout-activity-7398986372008701953-fS-O)**
 
 **Accompagnement personnalisé disponible** pour adapter l'intégration à vos besoins spécifiques.
 
